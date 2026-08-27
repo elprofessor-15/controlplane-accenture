@@ -1,0 +1,18 @@
+use_case_id: decision_support
+name: Executive Decision Support
+region: GLOBAL
+risk_category_overrides:
+  financial_approval: full_gate
+  credit_underwriting: full_gate
+  market_analysis: verified
+  definition: fast
+latency_budget_ms:
+  fast: 30
+  verified_grace_window_ms: 400
+  full_gate_p95_ms: 2000
+shadow_sample_rate: 0.25
+trust_thresholds:
+  fast_lane_min_score: 0.85
+  full_gate_max_score: 0.50
+cold_start_default_lane: full_gate
+blast_radius_cap: 0.02

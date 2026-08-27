@@ -1,0 +1,17 @@
+use_case_id: customer_support
+name: Customer Support Bot
+region: EU
+risk_category_overrides:
+  financial_advice: high
+  general_chat: low
+  pii: high
+latency_budget_ms:
+  fast: 20
+  full_gate_p95_ms: 1500
+  verified_grace_window_ms: 300
+shadow_sample_rate: 0.15
+trust_thresholds:
+  fast_lane_min_score: 0.8
+  full_gate_max_score: 0.4
+cold_start_default_lane: full_gate
+blast_radius_cap: 0.03
