@@ -1,3 +1,13 @@
+---
+title: ControlPlane Adaptive Trust Gateway
+emoji: shield
+colorFrom: red
+colorTo: yellow
+sdk: docker
+app_port: 7860
+license: mit
+---
+
 # ControlPlane.ai
 
 ControlPlane is an adaptive trust gateway for AI applications. The same model can answer different questions through different trust lanes. Every request produces a decision, check results, trust score update, and append-only audit record.
