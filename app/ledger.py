@@ -1,7 +1,7 @@
 import hashlib
 import uuid
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Dict, Any, Tuple
 from app.db import get_db_connection
 from app.trust_math import calculate_ledger_delta
@@ -69,7 +69,7 @@ async def record_ledger_event(
 
     new_score = max(0.05, min(1.0, current_score + delta))
     row_id = str(uuid.uuid4())
-    timestamp = datetime.utcnow().isoformat()
+    timestamp = datetime.now(timezone.utc).isoformat()
     
     # SHA-256 Tamper-Evident Hash Chain
     payload = f"{row_id}|{model_id}|{event_type}|{delta}|{new_score}|{request_id}|{prev_hash}|{timestamp}"

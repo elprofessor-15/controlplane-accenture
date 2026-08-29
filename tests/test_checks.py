@@ -17,6 +17,11 @@ class SafetyCheckTests(unittest.TestCase):
     def test_clean_text_is_unchanged(self):
         self.assertEqual(redact_sensitive_text("The answer is ready."), "The answer is ready.")
 
+    def test_reports_active_detection_method(self):
+        result = run_deterministic_checks("Contact Jane Smith at jane@example.com.", "Jane Smith is the account owner.", "pii")
+        self.assertIn(result["detection_method"], {"regex-only", "regex+NER"})
+        self.assertIn(result["method"], {"regex-only", "regex+NER"})
+
 
 class HeavyCheckTests(unittest.TestCase):
     def test_consistency_detects_disagreement(self):

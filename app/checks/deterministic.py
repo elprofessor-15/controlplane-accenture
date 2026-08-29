@@ -77,6 +77,9 @@ def run_deterministic_checks(prompt: str, response_text: str, category: str,
     start_time = time.perf_counter()
     findings = []
     flagged = False
+    detection_method = "regex-only"
+    if _NER_PIPELINE and _NER_PIPELINE is not False:
+        detection_method = "regex+NER"
     
     # 1. PII and Secret Exfiltration Scan
     prompt_spans = _spans_for_text(prompt)
@@ -118,5 +121,7 @@ def run_deterministic_checks(prompt: str, response_text: str, category: str,
         "response_spans": response_spans + toxic_spans,
         "prompt_spans": prompt_spans,
         "redacted_response": redact_sensitive_text(response_text, response_spans + toxic_spans),
+        "detection_method": detection_method,
+        "method": detection_method,
         "latency_ms": elapsed_ms
     }

@@ -151,11 +151,11 @@ async def execute_query(req: ExecutionRequest):
         heavy_result = await run_heavy_checks(req.prompt, raw_text, samples, req.use_case, risk_tier)
         decision_action = heavy_result["action"]
         justification = heavy_result["justification"]
-        
-        if decision_action == "BLOCK" or det_result["flagged"] or risk_tier == "high":
+
+        if decision_action == "BLOCK":
             final_response = f"[Action Blocked by Full Gate Compliance] {justification}"
             decision_action = "BLOCK"
-            
+
             # Place in Human Review Queue
             db = await get_db_connection()
             queue_id = str(uuid.uuid4())
@@ -169,6 +169,12 @@ async def execute_query(req: ExecutionRequest):
             await db.commit()
             await db.close()
             await record_ledger_event(req.model_id, "CHECK_FAIL", "high", "high", request_id, float(config.get("blast_radius_cap", 0.02)))
+        elif decision_action == "EDIT" or det_result["flagged"] or risk_tier == "high":
+            edited_text = det_result["redacted_response"] if det_result["flagged"] else raw_text
+            final_response = edited_text + "\n\n[ControlPlane note: this answer is presented with uncertainty and should be verified.]"
+            decision_action = "EDIT"
+            await _enqueue_review(req, request_id, raw_text, risk_tier, assigned_lane, justification)
+            await record_ledger_event(req.model_id, "CHECK_FAIL", heavy_result.get("severity", "medium"), heavy_result.get("confidence", "medium"), request_id, float(config.get("blast_radius_cap", 0.02)))
         else:
             await record_ledger_event(req.model_id, "SAMPLED_VERIFICATION_PASS", "low", "high", request_id)
 
