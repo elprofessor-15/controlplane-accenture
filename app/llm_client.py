@@ -17,6 +17,26 @@ def _provider_model(model_id: str, provider: str) -> str:
         return model_id if any(name in model_id.lower() for name in ("llama", "mixtral", "qwen")) else "llama-3.1-8b-instant"
     return model_id if "/" in model_id else "openai/gpt-oss-20b:free"
 
+async def _available_model(api_url: str, headers: Dict[str, str], preferred: str, provider: str) -> str | None:
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.get(f"{api_url}/models", headers=headers)
+        if response.status_code != 200:
+            return None
+        model_ids = [item.get("id", "") for item in response.json().get("data", [])]
+        if preferred in model_ids:
+            return preferred
+        excluded = ("guard", "whisper", "embed", "rerank", "moderation", "safety")
+        if provider == "groq":
+            compatible = [model for model in model_ids if not any(name in model.lower() for name in excluded)]
+            compatible.sort(key=lambda model: (not any(name in model.lower() for name in ("instruct", "instant", "versatile")), model))
+        else:
+            compatible = [model for model in model_ids if ":free" in model and not any(name in model.lower() for name in excluded)]
+            compatible.sort(key=lambda model: (not any(name in model.lower() for name in ("instruct", "chat", "gpt")), model))
+        return compatible[0] if compatible else (model_ids[0] if model_ids else None)
+    except (httpx.HTTPError, ValueError, TypeError):
+        return None
+
 async def generate_llm_response(prompt: str, model_id: str = "", temperature: float = 0.2) -> Dict[str, Any]:
     model_id = model_id or _env("DEFAULT_MODEL") or DEFAULT_MODEL
     start_time = time.perf_counter()
@@ -36,12 +56,20 @@ async def generate_llm_response(prompt: str, model_id: str = "", temperature: fl
                         "max_tokens": 400
                     }
                 )
+                if res.status_code == 404:
+                    discovered = await _available_model("https://api.groq.com/openai/v1", {"Authorization": f"Bearer {_env('GROQ_API_KEY')}"}, _provider_model(model_id, "groq"), "groq")
+                    if discovered:
+                        res = await client.post(
+                            "https://api.groq.com/openai/v1/chat/completions",
+                            headers={"Authorization": f"Bearer {_env('GROQ_API_KEY')}", "Content-Type": "application/json"},
+                            json={"model": discovered, "messages": [{"role": "user", "content": prompt}], "temperature": temperature, "max_tokens": 400},
+                        )
                 if res.status_code == 200:
                     data = res.json()
                     content = data["choices"][0]["message"]["content"]
                     tokens = data.get("usage", {}).get("total_tokens", len(content.split()) * 2)
                     latency = (time.perf_counter() - start_time) * 1000
-                    return {"content": content, "tokens": tokens, "latency_ms": latency, "provider": "groq", "provider_attempts": attempts + [{"provider": "groq", "status": "success"}]}
+                    return {"content": content, "tokens": tokens, "latency_ms": latency, "provider": "groq", "provider_model": res.json().get("model", _provider_model(model_id, "groq")), "provider_attempts": attempts + [{"provider": "groq", "status": "success"}]}
                 attempts.append({"provider": "groq", "status": f"http_{res.status_code}"})
         except Exception as error:
             attempts.append({"provider": "groq", "status": type(error).__name__})
@@ -61,12 +89,20 @@ async def generate_llm_response(prompt: str, model_id: str = "", temperature: fl
                         "temperature": temperature
                     }
                 )
+                if res.status_code == 404:
+                    discovered = await _available_model("https://openrouter.ai/api/v1", {"Authorization": f"Bearer {_env('OPENROUTER_API_KEY')}"}, _provider_model(model_id, "openrouter"), "openrouter")
+                    if discovered:
+                        res = await client.post(
+                            "https://openrouter.ai/api/v1/chat/completions",
+                            headers={"Authorization": f"Bearer {_env('OPENROUTER_API_KEY')}", "Content-Type": "application/json"},
+                            json={"model": discovered, "messages": [{"role": "user", "content": prompt}], "temperature": temperature, "max_tokens": 400},
+                        )
                 if res.status_code == 200:
                     data = res.json()
                     content = data["choices"][0]["message"]["content"]
                     tokens = data.get("usage", {}).get("total_tokens", len(content.split()) * 2)
                     latency = (time.perf_counter() - start_time) * 1000
-                    return {"content": content, "tokens": tokens, "latency_ms": latency, "provider": "openrouter", "provider_attempts": attempts + [{"provider": "openrouter", "status": "success"}]}
+                    return {"content": content, "tokens": tokens, "latency_ms": latency, "provider": "openrouter", "provider_model": res.json().get("model", _provider_model(model_id, "openrouter")), "provider_attempts": attempts + [{"provider": "openrouter", "status": "success"}]}
                 attempts.append({"provider": "openrouter", "status": f"http_{res.status_code}"})
         except Exception as error:
             attempts.append({"provider": "openrouter", "status": type(error).__name__})
