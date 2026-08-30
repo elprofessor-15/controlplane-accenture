@@ -10,6 +10,8 @@ license: mit
 
 # ControlPlane.ai
 
+Live Link : https://controlplane-drab.vercel.app/
+
 ControlPlane is an adaptive trust gateway for AI applications. The same model can answer different questions through different trust lanes. Every request produces a decision, check results, trust score update, and append-only audit record.
 
 The prototype demonstrates four routing concepts:
