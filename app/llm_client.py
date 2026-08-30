@@ -4,24 +4,33 @@ import asyncio
 import httpx
 from typing import Dict, Any, List
 
-GROQ_API_KEY = os.getenv("GROQ_API_KEY", "").strip()
-OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "").strip()
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "").strip()
-DEFAULT_MODEL = os.getenv("DEFAULT_MODEL", "llama-3.3-70b-versatile").strip()
+DEFAULT_MODEL = os.getenv("DEFAULT_MODEL", "llama-3.1-8b-instant").strip()
+
+def _env(name: str) -> str:
+    return os.getenv(name, "").strip()
+
+def _provider_model(model_id: str, provider: str) -> str:
+    configured = _env("GROQ_MODEL" if provider == "groq" else "OPENROUTER_MODEL")
+    if configured:
+        return configured
+    if provider == "groq":
+        return model_id if any(name in model_id.lower() for name in ("llama", "mixtral", "qwen")) else "llama-3.1-8b-instant"
+    return model_id if "/" in model_id else "openai/gpt-oss-20b:free"
 
 async def generate_llm_response(prompt: str, model_id: str = "", temperature: float = 0.2) -> Dict[str, Any]:
-    model_id = model_id or DEFAULT_MODEL
+    model_id = model_id or _env("DEFAULT_MODEL") or DEFAULT_MODEL
     start_time = time.perf_counter()
-    
+    attempts = []
+
     # 1. Try Groq Cloud if key exists
-    if GROQ_API_KEY:
+    if _env("GROQ_API_KEY"):
         try:
             async with httpx.AsyncClient(timeout=15.0) as client:
                 res = await client.post(
                     "https://api.groq.com/openai/v1/chat/completions",
-                    headers={"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"},
+                    headers={"Authorization": f"Bearer {_env('GROQ_API_KEY')}", "Content-Type": "application/json"},
                     json={
-                        "model": model_id if "llama" in model_id or "mixtral" in model_id else "llama-3.3-70b-versatile",
+                        "model": _provider_model(model_id, "groq"),
                         "messages": [{"role": "user", "content": prompt}],
                         "temperature": temperature,
                         "max_tokens": 400
@@ -32,19 +41,22 @@ async def generate_llm_response(prompt: str, model_id: str = "", temperature: fl
                     content = data["choices"][0]["message"]["content"]
                     tokens = data.get("usage", {}).get("total_tokens", len(content.split()) * 2)
                     latency = (time.perf_counter() - start_time) * 1000
-                    return {"content": content, "tokens": tokens, "latency_ms": latency, "provider": "groq"}
-        except Exception:
-            pass
+                    return {"content": content, "tokens": tokens, "latency_ms": latency, "provider": "groq", "provider_attempts": attempts + [{"provider": "groq", "status": "success"}]}
+                attempts.append({"provider": "groq", "status": f"http_{res.status_code}"})
+        except Exception as error:
+            attempts.append({"provider": "groq", "status": type(error).__name__})
+    else:
+        attempts.append({"provider": "groq", "status": "not_configured"})
 
     # 2. Try OpenRouter if key exists
-    if OPENROUTER_API_KEY:
+    if _env("OPENROUTER_API_KEY"):
         try:
             async with httpx.AsyncClient(timeout=15.0) as client:
                 res = await client.post(
                     "https://openrouter.ai/api/v1/chat/completions",
-                    headers={"Authorization": f"Bearer {OPENROUTER_API_KEY}", "Content-Type": "application/json"},
+                    headers={"Authorization": f"Bearer {_env('OPENROUTER_API_KEY')}", "Content-Type": "application/json"},
                     json={
-                        "model": "meta-llama/llama-3.3-70b-instruct:free",
+                        "model": _provider_model(model_id, "openrouter"),
                         "messages": [{"role": "user", "content": prompt}],
                         "temperature": temperature
                     }
@@ -54,9 +66,12 @@ async def generate_llm_response(prompt: str, model_id: str = "", temperature: fl
                     content = data["choices"][0]["message"]["content"]
                     tokens = data.get("usage", {}).get("total_tokens", len(content.split()) * 2)
                     latency = (time.perf_counter() - start_time) * 1000
-                    return {"content": content, "tokens": tokens, "latency_ms": latency, "provider": "openrouter"}
-        except Exception:
-            pass
+                    return {"content": content, "tokens": tokens, "latency_ms": latency, "provider": "openrouter", "provider_attempts": attempts + [{"provider": "openrouter", "status": "success"}]}
+                attempts.append({"provider": "openrouter", "status": f"http_{res.status_code}"})
+        except Exception as error:
+            attempts.append({"provider": "openrouter", "status": type(error).__name__})
+    else:
+        attempts.append({"provider": "openrouter", "status": "not_configured"})
 
     # 3. High-Fidelity Local Heuristic Engine (zero failure fallback)
     p_lower = prompt.lower()
@@ -94,7 +109,8 @@ async def generate_llm_response(prompt: str, model_id: str = "", temperature: fl
         "content": text,
         "tokens": len(text.split()) + 15,
         "latency_ms": latency,
-        "provider": "local_synthesizer"
+        "provider": "local_synthesizer",
+        "provider_attempts": attempts,
     }
 
 async def generate_parallel_samples(prompt: str, count: int = 3) -> List[str]:
