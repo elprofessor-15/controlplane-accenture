@@ -1,7 +1,8 @@
 import aiosqlite
 import os
 
-DB_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), "controlplane.db")
+PROJECT_ROOT = os.path.dirname(os.path.dirname(__file__))
+DB_PATH = os.path.join("/tmp" if os.getenv("VERCEL") else PROJECT_ROOT, "controlplane.db")
 
 async def init_db():
     async with aiosqlite.connect(DB_PATH) as db:

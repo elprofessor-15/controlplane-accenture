@@ -3,6 +3,7 @@ import time
 import asyncio
 import random
 import json
+import os
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException
 from fastapi.staticfiles import StaticFiles
@@ -35,7 +36,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-app.mount("/static", StaticFiles(directory="static"), name="static")
+STATIC_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "static")
+app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 @app.get("/api/health")
 async def health_check():
@@ -98,7 +100,7 @@ class DemoResetRequest(BaseModel):
 @app.get("/")
 async def serve_index():
     from fastapi.responses import FileResponse
-    return FileResponse("static/index.html")
+    return FileResponse(os.path.join(STATIC_DIR, "index.html"))
 
 @app.post("/api/execute")
 async def execute_query(req: ExecutionRequest):

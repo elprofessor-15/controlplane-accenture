@@ -1,0 +1,7 @@
+.venv
+__pycache__
+*.pyc
+controlplane.db
+tests
+.git
+.gitignore
