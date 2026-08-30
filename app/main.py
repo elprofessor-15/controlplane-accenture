@@ -195,6 +195,8 @@ async def execute_query(req: ExecutionRequest):
     total_latency = (time.perf_counter() - req_start) * 1000
 
     # Step 6: Write to Immutable Audit Log
+    # Privacy-forward design: redact before persisting so reviewers can trace the decision
+    # without storing sensitive customer content in the internal audit record.
     audit_data = {
         "request_id": request_id,
         "use_case": req.use_case,

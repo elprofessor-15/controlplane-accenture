@@ -135,6 +135,8 @@ or:
 export OPENROUTER_API_KEY="your-key"
 ```
 
+The internal audit store is intentionally privacy-forward: it writes the redacted response to the audit log instead of the original raw text. This preserves traceability for human review while avoiding retention of sensitive content in the local database record.
+
 Never commit API keys to the repository. The `.env.example` file contains names only and does not contain credentials.
 
 ## Start the Application

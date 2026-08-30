@@ -43,22 +43,24 @@ def _semantic_similarity(text_a: str, text_b: str) -> float:
 
 def evaluate_self_consistency(samples: List[str]) -> Dict[str, Any]:
     if len(samples) < 2:
-        return {"divergence_score": 0.0, "status": "PASS"}
-    
+        return {"divergence_score": 0.0, "status": "PASS", "method": "sentence_transformer" if _EMBEDDER else "lexical_fallback"}
+
+    method = "sentence_transformer" if _EMBEDDER else "lexical_fallback"
     sim_scores = []
     for i in range(len(samples)):
         for j in range(i + 1, len(samples)):
-            sim_scores.append(_jaccard_similarity(samples[i], samples[j]))
-            
+            sim_scores.append(_semantic_similarity(samples[i], samples[j]) if method == "sentence_transformer" else _jaccard_similarity(samples[i], samples[j]))
+
     avg_similarity = sum(sim_scores) / len(sim_scores) if sim_scores else 1.0
     divergence = 1.0 - avg_similarity
-    
-    # If variations say very different things, divergence is high
-    status = "FAIL" if divergence > 0.65 else "PASS"
+    disagreement_threshold = 0.5
+
+    status = "FAIL" if divergence > disagreement_threshold else "PASS"
     return {
         "divergence_score": round(divergence, 3),
         "status": status,
-        "sample_count": len(samples)
+        "sample_count": len(samples),
+        "method": method
     }
 
 def evaluate_grounding(response_text: str, use_case_id: str) -> Dict[str, Any]:
@@ -86,39 +88,42 @@ def evaluate_grounding(response_text: str, use_case_id: str) -> Dict[str, Any]:
 
 async def run_heavy_checks(prompt: str, response_text: str, samples: List[str], use_case_id: str, risk_tier: str) -> Dict[str, Any]:
     start_time = time.perf_counter()
-    
+
+    from app.checks.deterministic import _spans_for_text
+
     # 1. Multi-Sample Self Consistency
     consistency = evaluate_self_consistency(samples)
-    
+
     # 2. Source Grounding Entailment
     grounding = evaluate_grounding(response_text, use_case_id)
-    
+
     # 3. LLM-as-Judge Synthesizer Verdict
     severity = "low"
     confidence = "high"
     action = "ALLOW"
     justification = "All heavy semantic and validation checks passed."
-    
+
     if consistency["status"] == "FAIL":
         severity = "medium"
         confidence = "medium"
         action = "EDIT"
         justification = f"High output divergence across temperatures (divergence index: {consistency['divergence_score']}). Added uncertainty disclaimer."
-    
+
     if risk_tier == "high" and grounding["status"] == "FAIL":
         severity = "high"
         confidence = "high"
         action = "BLOCK"
         justification = "High-stakes query failed source grounding entailment checks against verified corporate records."
 
-    if "SSN" in response_text or "4111-" in response_text:
+    pii_spans = [span for span in _spans_for_text(response_text) if span["label"].endswith("_detected")]
+    if pii_spans:
         severity = "high"
         confidence = "high"
         action = "BLOCK"
         justification = "Model output attempted to disclose prohibited credentials or personal records."
 
     elapsed_ms = (time.perf_counter() - start_time) * 1000
-    
+
     return {
         "action": action,
         "severity": severity,

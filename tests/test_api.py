@@ -1,4 +1,5 @@
 import unittest
+import unittest.mock
 
 try:
     from fastapi.testclient import TestClient
