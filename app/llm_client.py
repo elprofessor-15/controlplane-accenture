@@ -7,8 +7,10 @@ from typing import Dict, Any, List
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "").strip()
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "").strip()
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "").strip()
+DEFAULT_MODEL = os.getenv("DEFAULT_MODEL", "llama-3.3-70b-versatile").strip()
 
-async def generate_llm_response(prompt: str, model_id: str = "llama-3.3-70b-versatile", temperature: float = 0.2) -> Dict[str, Any]:
+async def generate_llm_response(prompt: str, model_id: str = "", temperature: float = 0.2) -> Dict[str, Any]:
+    model_id = model_id or DEFAULT_MODEL
     start_time = time.perf_counter()
     
     # 1. Try Groq Cloud if key exists
