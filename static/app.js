@@ -72,15 +72,19 @@ document.addEventListener("DOMContentLoaded", () => {
         try {
             const raw = document.getElementById("policyYamlText").value;
             const parsed = JSON.parse(raw);
-            await fetch("/api/config/update", {
+            const res = await fetch("/api/config/update", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({ use_case: currentUseCase, config_data: parsed })
             });
+            if (!res.ok) {
+                const errBody = await res.json().catch(() => ({}));
+                throw new Error(errBody.detail || `Server rejected policy (HTTP ${res.status})`);
+            }
             await loadCurrentConfig();
-            alert("Policy updated and reloaded in runtime engine.");
+            showPolicyFeedback("Policy validated and hot-reloaded into the runtime engine.", false);
         } catch (err) {
-            alert("Failed to update policy: " + err.message);
+            showPolicyFeedback("Rejected: " + err.message, true);
         }
     });
 
@@ -137,6 +141,41 @@ async function runExecution(prompt) {
     }
 }
 
+function describeTrustBand(score) {
+    if (score >= 0.75) return "high trust";
+    if (score >= 0.5) return "rebuilding trust";
+    return "low trust";
+}
+
+function renderReasoning(data) {
+    const el = document.getElementById("reasoningLine");
+    const tier = (data.risk_tier || "").toLowerCase();
+    const trust = data.model_trust_score;
+    const trustBand = describeTrustBand(trust);
+    const laneLabel = data.lane === "FAST" ? "Fast Lane" : (data.lane === "VERIFIED" ? "Verified Lane" : "Full Gate");
+    let reason;
+    if (data.is_shadow_sampled) {
+        reason = `Query risk (${tier}) looked routine, but this request was silently selected for a Shadow Lane deep-check anyway.`;
+    } else if (tier === "high") {
+        reason = `Query risk is high, so this request goes to ${laneLabel} regardless of model trust.`;
+    } else if (trust < 0.5) {
+        reason = `Model trust is currently low (${trust.toFixed(3)}), so this request is held to stricter checking even though query risk is ${tier}.`;
+    } else {
+        reason = `Query risk is ${tier} and the model is in a ${trustBand} band (${trust.toFixed(3)}), so this request is routed to ${laneLabel}.`;
+    }
+    el.textContent = reason;
+}
+
+function renderCheckGauge(fillId, valueId, ratio, valueText) {
+    const fill = document.getElementById(fillId);
+    const value = document.getElementById(valueId);
+    const pct = Math.max(0, Math.min(1, ratio)) * 100;
+    fill.style.width = `${pct}%`;
+    fill.classList.remove("gauge-good", "gauge-warn", "gauge-bad");
+    fill.classList.add(pct >= 70 ? "gauge-good" : (pct >= 40 ? "gauge-warn" : "gauge-bad"));
+    value.textContent = valueText;
+}
+
 function renderResult(data) {
     const badge = document.getElementById("laneBadge");
     const shadowBadge = document.getElementById("shadowBadge");
@@ -164,6 +203,7 @@ function renderResult(data) {
     document.getElementById("resRiskTier").textContent = data.risk_tier.toUpperCase();
     document.getElementById("resOutput").textContent = data.final_response;
     document.getElementById("tamperHash").textContent = data.tamper_hash;
+    renderReasoning(data);
 
     // Deterministic Info
     const det = data.deterministic_checks;
@@ -171,6 +211,7 @@ function renderResult(data) {
     detStatus.textContent = det.flagged ? "FLAGGED" : "PASS";
     detStatus.className = det.flagged ? "text-rose-400 font-mono text-xs font-bold" : "text-emerald-400 font-mono text-xs";
     document.getElementById("detDetails").textContent = `PII: ${det.flagged ? 'Risk Found' : 'Clean'} | Latency: ${det.latency_ms.toFixed(1)}ms`;
+    document.getElementById("detMethodTag").textContent = det.detection_method === "regex+NER" ? "regex + NER" : "regex-only";
 
     // Heavy Info
     const heavy = data.heavy_checks;
@@ -179,7 +220,22 @@ function renderResult(data) {
     heavyStatus.className = heavy.action === "BLOCK" ? "text-rose-400 font-mono text-xs font-bold" : (heavy.action === "EDIT" ? "text-amber-400 font-mono text-xs font-bold" : "text-emerald-400 font-mono text-xs");
     const consistency = data.heavy_checks.consistency;
     const grounding = data.heavy_checks.grounding;
-    document.getElementById("heavyDetails").textContent = `${data.decision_justification} ${consistency ? `Divergence ${consistency.divergence_score}.` : ""} ${grounding ? `Grounding ${grounding.status.toLowerCase()} (${grounding.method}).` : ""}`;
+
+    if (consistency && typeof consistency.divergence_score === "number") {
+        const agreement = 1 - consistency.divergence_score;
+        renderCheckGauge("consistencyGauge", "consistencyValue", agreement, `${Math.round(agreement * 100)}%`);
+    } else {
+        renderCheckGauge("consistencyGauge", "consistencyValue", 1, "--");
+    }
+
+    if (grounding && typeof grounding.similarity_score === "number") {
+        renderCheckGauge("groundingGauge", "groundingValue", grounding.similarity_score, `${Math.round(grounding.similarity_score * 100)}%`);
+    } else {
+        renderCheckGauge("groundingGauge", "groundingValue", 1, "--");
+    }
+
+    const heavyMethod = (consistency && consistency.method) || (grounding && grounding.method);
+    document.getElementById("heavyMethodTag").textContent = heavyMethod === "sentence_transformer" ? "sentence-transformer embeddings" : "lexical fallback";
 
     // Update Header Trust
     const trustElem = document.getElementById("headerTrustScore");
@@ -221,6 +277,15 @@ async function fetchDashboardMetrics() {
         document.getElementById("calibrationSummary").textContent = rates.length ? `${rates.length} risk categories tracked` : "Collecting category outcomes";
         renderTrustSparkline(data.ledger_history || []);
     } catch (e) { setSystemStatus("Metrics temporarily unavailable.", "alert"); }
+}
+
+function showPolicyFeedback(message, isError) {
+    const el = document.getElementById("policyFeedback");
+    el.textContent = message;
+    el.classList.remove("hidden", "policy-feedback-ok", "policy-feedback-error");
+    el.classList.add(isError ? "policy-feedback-error" : "policy-feedback-ok");
+    clearTimeout(showPolicyFeedback._timer);
+    showPolicyFeedback._timer = setTimeout(() => el.classList.add("hidden"), 5000);
 }
 
 function setSystemStatus(message, state) {
@@ -292,15 +357,22 @@ async function fetchAuditTrail() {
         const container = document.getElementById("auditLogList");
         container.innerHTML = "";
 
-        data.audit_logs.forEach(log => {
+        data.audit_logs.forEach((log, index) => {
             const row = document.createElement("div");
             row.className = "audit-row";
+            const prevRef = index < data.audit_logs.length - 1
+                ? escapeHTML(data.audit_logs[index + 1].tamper_hash.substring(0, 8))
+                : "genesis";
             row.innerHTML = `
                 <div>
                     <span class="audit-lane">[${escapeHTML(log.lane)}]</span>
                     <span class="audit-prompt">${escapeHTML(log.prompt.substring(0, 34))}...</span>
                 </div>
-                <span class="audit-hash">${escapeHTML(log.tamper_hash.substring(0, 8))}</span>
+                <span class="audit-hash">
+                    <span class="chain-link" title="Links to previous entry">${prevRef}</span>
+                    <i class="fa-solid fa-link chain-icon"></i>
+                    ${escapeHTML(log.tamper_hash.substring(0, 8))}
+                </span>
             `;
             row.addEventListener("click", () => showAuditDetail(log.request_id));
             container.appendChild(row);
