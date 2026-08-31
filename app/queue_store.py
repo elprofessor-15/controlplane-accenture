@@ -11,6 +11,7 @@ except ImportError:
     Redis = None
 
 QUEUE_KEY = "controlplane:review_queue"
+AUDIT_KEY = "controlplane:audit_log"
 
 
 def _configured() -> bool:
@@ -72,3 +73,24 @@ async def resolve_review_item(queue_id: str, status: str) -> dict[str, Any] | No
     except (httpx.HTTPError, ValueError):
         return None
     return next((item for item in items if item.get("id") == queue_id), None)
+
+
+async def persist_audit_entry(entry: dict[str, Any]) -> bool:
+    if not _configured():
+        return False
+    try:
+        await _command(["LPUSH", AUDIT_KEY, json.dumps(entry, separators=(",", ":"))])
+        await _command(["LTRIM", AUDIT_KEY, "0", "99"])
+        return True
+    except (httpx.HTTPError, ValueError):
+        return False
+
+
+async def list_audit_entries() -> list[dict[str, Any]] | None:
+    if not _configured():
+        return None
+    try:
+        values = await _command(["LRANGE", AUDIT_KEY, "0", "99"])
+        return [json.loads(value) for value in (values or [])]
+    except (httpx.HTTPError, ValueError):
+        return None

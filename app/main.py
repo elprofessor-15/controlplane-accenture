@@ -4,6 +4,7 @@ import asyncio
 import random
 import json
 import os
+from datetime import datetime, timezone
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException
 from fastapi.staticfiles import StaticFiles
@@ -19,7 +20,13 @@ from app.checks.deterministic import run_deterministic_checks, redact_sensitive_
 from app.checks.heavy import run_heavy_checks
 from app.router import determine_lane
 from app.ledger import get_latest_trust_score, record_ledger_event, record_audit_entry, get_rolling_token_range
-from app.queue_store import list_review_items, persist_review_item, resolve_review_item as resolve_persisted_review
+from app.queue_store import (
+    list_review_items,
+    persist_review_item,
+    resolve_review_item as resolve_persisted_review,
+    list_audit_entries,
+    persist_audit_entry,
+)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -225,6 +232,7 @@ async def execute_query(req: ExecutionRequest):
         "latency_ms": round(total_latency, 2)
     }
     tamper_hash = await record_audit_entry(audit_data)
+    await persist_audit_entry({**audit_data, "tamper_hash": tamper_hash, "created_at": datetime.now(timezone.utc).isoformat()})
 
     if is_shadow_sampled:
         asyncio.create_task(_run_shadow_check(req, request_id, raw_text, det_result, risk_tier))
@@ -284,6 +292,37 @@ async def _run_shadow_check(req: ExecutionRequest, request_id: str, raw_text: st
 
 @app.get("/api/dashboard_metrics")
 async def get_metrics():
+    persisted_audit = await list_audit_entries()
+    if persisted_audit is not None:
+        lane_counts = {}
+        lane_latencies = {}
+        category_stats = {}
+        for item in persisted_audit:
+            lane = item["lane"]
+            lane_counts[lane] = lane_counts.get(lane, 0) + 1
+            lane_latencies.setdefault(lane, []).append(float(item["latency_ms"]))
+            category = item["risk_category"]
+            stats = category_stats.setdefault(category, {"flagged": 0, "count": 0})
+            stats["flagged"] += int(item.get("deterministic_checks", {}).get("flagged", False))
+            stats["count"] += 1
+        persisted_queue = await list_review_items() or []
+        pending_reviews = sum(item.get("status") == "PENDING" for item in persisted_queue)
+        approved_reviews = sum(item.get("status") == "APPROVED" for item in persisted_queue)
+        shadow_disagreements = sum(bool(item.get("heavy_checks", {}).get("shadow_disagreement")) for item in persisted_audit)
+        return {
+            "lane_distribution": lane_counts,
+            "lane_latencies": {lane: round(sum(values) / len(values), 1) for lane, values in lane_latencies.items()},
+            "pending_reviews": pending_reviews,
+            "approved_reviews": approved_reviews,
+            "shadow_disagreements": shadow_disagreements,
+            "total_requests": len(persisted_audit),
+            "average_latency_ms": round(sum(float(item["latency_ms"]) for item in persisted_audit) / len(persisted_audit), 1) if persisted_audit else 0,
+            "calibration_flag_rates": {
+                category: {"flag_rate": round(stats["flagged"] / stats["count"], 3), "sample_count": stats["count"], "status": "READY" if stats["count"] >= 5 else "WARMING_UP"}
+                for category, stats in category_stats.items()
+            },
+            "ledger_history": [],
+        }
     db = await get_db_connection()
     try:
         cur = await db.execute("SELECT lane, COUNT(*) FROM audit_log GROUP BY lane")
@@ -362,6 +401,15 @@ async def get_review_queue():
 
 @app.post("/api/review_queue/resolve")
 async def resolve_review_item(req: ReviewActionRequest):
+    action = req.action.upper()
+    if action not in {"APPROVE", "REJECT", "ESCALATE"}:
+        raise HTTPException(status_code=400, detail="Action must be APPROVE, REJECT, or ESCALATE")
+    status = {"APPROVE": "APPROVED", "REJECT": "REJECTED", "ESCALATE": "ESCALATED"}[action]
+    persisted = await resolve_persisted_review(req.queue_id, status)
+    if persisted is not None:
+        await record_ledger_event(persisted["model_id"], {"APPROVE": "HUMAN_APPROVED", "REJECT": "HUMAN_REJECTED", "ESCALATE": "HUMAN_ESCALATED"}[action], "high", "high", persisted["request_id"])
+        return {"status": "success", "new_review_status": status}
+
     db = await get_db_connection()
     try:
         cur = await db.execute("SELECT model_id, request_id FROM review_queue WHERE id = ?", (req.queue_id,))
@@ -370,14 +418,7 @@ async def resolve_review_item(req: ReviewActionRequest):
             raise HTTPException(status_code=404, detail="Queue item not found")
         model_id, request_id = row[0], row[1]
 
-        action = req.action.upper()
-        if action not in {"APPROVE", "REJECT", "ESCALATE"}:
-            raise HTTPException(status_code=400, detail="Action must be APPROVE, REJECT, or ESCALATE")
         status = {"APPROVE": "APPROVED", "REJECT": "REJECTED", "ESCALATE": "ESCALATED"}[action]
-        persisted = await resolve_persisted_review(req.queue_id, status)
-        if persisted is not None:
-            await record_ledger_event(model_id, {"APPROVE": "HUMAN_APPROVED", "REJECT": "HUMAN_REJECTED", "ESCALATE": "HUMAN_ESCALATED"}[action], "high", "high", request_id)
-            return {"status": "success", "new_review_status": status}
         await db.execute("UPDATE review_queue SET status = ? WHERE id = ?", (status, req.queue_id))
         await db.commit()
 
@@ -390,6 +431,15 @@ async def resolve_review_item(req: ReviewActionRequest):
 
 @app.get("/api/audit_log")
 async def get_audit_trail():
+    persisted = await list_audit_entries()
+    if persisted is not None:
+        return {"audit_logs": [
+            {"request_id": item["request_id"], "use_case": item["use_case"], "model_id": item["model_id"],
+             "prompt": item["prompt"], "lane": item["lane"], "risk_tier": item["risk_tier"],
+             "decision_action": item["decision_action"], "latency_ms": item["latency_ms"],
+             "tamper_hash": item["tamper_hash"], "created_at": item.get("created_at", "")}
+            for item in persisted
+        ]}
     db = await get_db_connection()
     try:
         cur = await db.execute("SELECT request_id, use_case, model_id, prompt, lane, risk_tier, decision_action, latency_ms, tamper_hash, created_at FROM audit_log ORDER BY created_at DESC LIMIT 25")
@@ -412,6 +462,12 @@ async def get_audit_trail():
 
 @app.get("/api/audit_log/{request_id}")
 async def get_audit_detail(request_id: str):
+    persisted = await list_audit_entries()
+    if persisted is not None:
+        detail = next((item for item in persisted if item["request_id"] == request_id), None)
+        if detail is None:
+            raise HTTPException(status_code=404, detail="Audit entry not found")
+        return detail
     db = await get_db_connection()
     try:
         cur = await db.execute(
