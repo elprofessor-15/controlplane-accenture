@@ -1,5 +1,11 @@
 import unittest
-import unittest.mock
+import warnings
+
+warnings.filterwarnings(
+    "ignore",
+    message=r"Using `httpx` with `starlette.testclient` is deprecated.*",
+    category=DeprecationWarning,
+)
 
 try:
     from fastapi.testclient import TestClient

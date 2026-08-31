@@ -4,3 +4,4 @@ __pycache__/
 .env
 controlplane.db
 .DS_Store
+.vercel
