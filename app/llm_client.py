@@ -14,6 +14,12 @@ SYSTEM_INSTRUCTION = (
 def _env(name: str) -> str:
     return os.getenv(name, "").strip()
 
+def _local_fallback_enabled() -> bool:
+    configured = _env("ALLOW_LOCAL_FALLBACK").lower()
+    if configured:
+        return configured in {"1", "true", "yes", "on"}
+    return not bool(_env("VERCEL"))
+
 def _provider_model(model_id: str, provider: str) -> str:
     configured = _env("GROQ_MODEL" if provider == "groq" else "OPENROUTER_MODEL")
     if configured:
@@ -114,7 +120,10 @@ async def generate_llm_response(prompt: str, model_id: str = "", temperature: fl
     else:
         attempts.append({"provider": "openrouter", "status": "not_configured"})
 
-    # 3. High-Fidelity Local Heuristic Engine (zero failure fallback)
+    if not _local_fallback_enabled():
+        raise RuntimeError(f"No hosted model succeeded: {attempts}")
+
+    # Explicit offline demo mode for local development without provider credentials.
     p_lower = prompt.lower()
     if "store hours" in p_lower:
         text = "Our flagship retail stores are open Monday through Saturday from 9:00 AM to 8:00 PM, and Sunday from 10:00 AM to 6:00 PM EST."
