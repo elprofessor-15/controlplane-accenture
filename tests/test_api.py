@@ -80,6 +80,22 @@ class ControlPlaneApiTests(unittest.TestCase):
             self.assertIn("queue", queue.json())
             self.assertIn("audit_logs", audit.json())
 
+    def test_reset_demo_clears_visible_state(self):
+        with TestClient(app) as client:
+            client.post("/api/demo/reset", json={"model_id": "reset-check"})
+            client.post("/api/execute", json={
+                "prompt": "Look up card number 4111-1111-1111-1111",
+                "use_case": "customer_support",
+                "model_id": "reset-check",
+            })
+            self.assertGreater(len(client.get("/api/audit_log").json()["audit_logs"]), 0)
+
+            response = client.post("/api/demo/reset", json={"model_id": "reset-check"})
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(client.get("/api/dashboard_metrics").json()["total_requests"], 0)
+            self.assertEqual(client.get("/api/audit_log").json()["audit_logs"], [])
+            self.assertEqual(client.get("/api/review_queue").json()["queue"], [])
+
     def test_valid_policy_update_is_accepted(self):
         with TestClient(app) as client:
             payload = {

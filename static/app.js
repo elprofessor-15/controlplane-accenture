@@ -261,7 +261,7 @@ async function loadCurrentConfig() {
 
 async function fetchDashboardMetrics() {
     try {
-        const res = await fetch("/api/dashboard_metrics");
+        const res = await fetch("/api/dashboard_metrics", { cache: "no-store" });
         const data = await res.json();
         const dist = data.lane_distribution;
         document.getElementById("metricFastCount").textContent = dist["FAST"] || 0;
@@ -305,7 +305,7 @@ function renderTrustSparkline(points) {
 
 async function fetchReviewQueue() {
     try {
-        const res = await fetch("/api/review_queue");
+        const res = await fetch("/api/review_queue", { cache: "no-store" });
         const data = await res.json();
         const container = document.getElementById("reviewQueueList");
         const badge = document.getElementById("queueBadge");
@@ -364,7 +364,7 @@ async function resolveReview(queueId, action) {
 
 async function fetchAuditTrail() {
     try {
-        const res = await fetch("/api/audit_log");
+        const res = await fetch("/api/audit_log", { cache: "no-store" });
         const data = await res.json();
         const container = document.getElementById("auditLogList");
         container.innerHTML = "";

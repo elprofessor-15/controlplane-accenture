@@ -126,3 +126,28 @@ async def list_audit_entries() -> list[dict[str, Any]] | None:
         return [json.loads(value) for value in (values or [])]
     except (httpx.HTTPError, ValueError):
         return None
+
+
+async def clear_persisted_state() -> bool:
+    if not _configured():
+        return False
+    try:
+        redis_url = os.getenv("REDIS_URL", "").strip()
+        if redis_url and Redis is not None:
+            client = Redis.from_url(redis_url, decode_responses=True)
+            try:
+                item_keys = [key async for key in client.scan_iter(f"{QUEUE_ITEM_PREFIX}*")]
+                if item_keys:
+                    await client.delete(*item_keys)
+                await client.delete(QUEUE_KEY, AUDIT_KEY)
+            finally:
+                await client.aclose()
+            return True
+        queue_ids = await _command(["LRANGE", QUEUE_KEY, "0", "99"]) or []
+        item_keys = [f"{QUEUE_ITEM_PREFIX}{item_id}" for item_id in queue_ids]
+        if item_keys:
+            await _command(["DEL", *item_keys])
+        await _command(["DEL", QUEUE_KEY, AUDIT_KEY])
+        return True
+    except (httpx.HTTPError, ValueError):
+        return False

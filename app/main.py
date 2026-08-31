@@ -26,6 +26,7 @@ from app.queue_store import (
     resolve_review_item as resolve_persisted_review,
     list_audit_entries,
     persist_audit_entry,
+    clear_persisted_state,
 )
 
 @asynccontextmanager
@@ -498,12 +499,12 @@ async def get_config_endpoint(use_case: str):
 
 @app.post("/api/demo/reset")
 async def reset_demo(req: DemoResetRequest):
-    """Reset local demo evidence while retaining cold-start behavior for other models."""
+    """Reset all demo evidence across local SQLite and shared Vercel storage."""
     db = await get_db_connection()
     try:
-        await db.execute("DELETE FROM audit_log WHERE model_id = ?", (req.model_id,))
-        await db.execute("DELETE FROM review_queue WHERE model_id = ?", (req.model_id,))
-        await db.execute("DELETE FROM trust_ledger WHERE model_id = ?", (req.model_id,))
+        await db.execute("DELETE FROM audit_log")
+        await db.execute("DELETE FROM review_queue")
+        await db.execute("DELETE FROM trust_ledger")
         await db.execute(
             """INSERT INTO trust_ledger
             (id, model_id, event_type, delta, resulting_score, request_id, prev_hash, current_hash)
@@ -513,6 +514,7 @@ async def reset_demo(req: DemoResetRequest):
         await db.commit()
     finally:
         await db.close()
+    await clear_persisted_state()
     return {"status": "reset", "model_id": req.model_id, "trust_score": 0.86}
 
 @app.post("/api/config/update")
