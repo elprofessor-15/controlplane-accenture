@@ -19,6 +19,7 @@ from app.checks.deterministic import run_deterministic_checks, redact_sensitive_
 from app.checks.heavy import run_heavy_checks
 from app.router import determine_lane
 from app.ledger import get_latest_trust_score, record_ledger_event, record_audit_entry, get_rolling_token_range
+from app.queue_store import list_review_items, persist_review_item, resolve_review_item as resolve_persisted_review
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -170,13 +171,17 @@ async def execute_query(req: ExecutionRequest):
             )
             await db.commit()
             await db.close()
-            await record_ledger_event(req.model_id, "CHECK_FAIL", "high", "high", request_id, float(config.get("blast_radius_cap", 0.02)))
+            await persist_review_item({
+                "id": queue_id, "request_id": request_id, "use_case": req.use_case,
+                "model_id": req.model_id, "prompt": redact_sensitive_text(req.prompt),
+                "response_preview": det_result["redacted_response"][:200], "risk_tier": risk_tier,
+                "lane": assigned_lane, "flag_reason": justification, "status": "PENDING",
+            })
         elif decision_action == "EDIT" or det_result["flagged"] or risk_tier == "high":
             edited_text = det_result["redacted_response"] if det_result["flagged"] else raw_text
             final_response = edited_text + "\n\n[ControlPlane note: this answer is presented with uncertainty and should be verified.]"
             decision_action = "EDIT"
             await _enqueue_review(req, request_id, raw_text, risk_tier, assigned_lane, justification)
-            await record_ledger_event(req.model_id, "CHECK_FAIL", heavy_result.get("severity", "medium"), heavy_result.get("confidence", "medium"), request_id, float(config.get("blast_radius_cap", 0.02)))
         else:
             await record_ledger_event(req.model_id, "SAMPLED_VERIFICATION_PASS", "low", "high", request_id)
 
@@ -249,13 +254,20 @@ async def execute_query(req: ExecutionRequest):
 async def _enqueue_review(req: ExecutionRequest, request_id: str, raw_text: str, risk_tier: str, lane: str, reason: str):
     db = await get_db_connection()
     try:
+        queue_id = str(uuid.uuid4())
         await db.execute(
             """INSERT INTO review_queue
             (id, request_id, use_case, model_id, prompt, response_preview, risk_tier, lane, flag_reason)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (str(uuid.uuid4()), request_id, req.use_case, req.model_id, redact_sensitive_text(req.prompt), redact_sensitive_text(raw_text)[:500], risk_tier, lane, reason),
+            (queue_id, request_id, req.use_case, req.model_id, redact_sensitive_text(req.prompt), redact_sensitive_text(raw_text)[:500], risk_tier, lane, reason),
         )
         await db.commit()
+        await persist_review_item({
+            "id": queue_id, "request_id": request_id, "use_case": req.use_case,
+            "model_id": req.model_id, "prompt": redact_sensitive_text(req.prompt),
+            "response_preview": redact_sensitive_text(raw_text)[:500], "risk_tier": risk_tier,
+            "lane": lane, "flag_reason": reason, "status": "PENDING",
+        })
     finally:
         await db.close()
 
@@ -325,6 +337,9 @@ async def get_metrics():
 
 @app.get("/api/review_queue")
 async def get_review_queue():
+    persisted = await list_review_items()
+    if persisted is not None:
+        return {"queue": persisted}
     db = await get_db_connection()
     try:
         cur = await db.execute("SELECT id, request_id, use_case, model_id, prompt, response_preview, risk_tier, lane, flag_reason, status FROM review_queue ORDER BY created_at DESC LIMIT 20")
@@ -359,6 +374,10 @@ async def resolve_review_item(req: ReviewActionRequest):
         if action not in {"APPROVE", "REJECT", "ESCALATE"}:
             raise HTTPException(status_code=400, detail="Action must be APPROVE, REJECT, or ESCALATE")
         status = {"APPROVE": "APPROVED", "REJECT": "REJECTED", "ESCALATE": "ESCALATED"}[action]
+        persisted = await resolve_persisted_review(req.queue_id, status)
+        if persisted is not None:
+            await record_ledger_event(model_id, {"APPROVE": "HUMAN_APPROVED", "REJECT": "HUMAN_REJECTED", "ESCALATE": "HUMAN_ESCALATED"}[action], "high", "high", request_id)
+            return {"status": "success", "new_review_status": status}
         await db.execute("UPDATE review_queue SET status = ? WHERE id = ?", (status, req.queue_id))
         await db.commit()
 

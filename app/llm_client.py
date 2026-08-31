@@ -5,6 +5,11 @@ import httpx
 from typing import Dict, Any, List
 
 DEFAULT_MODEL = os.getenv("DEFAULT_MODEL", "llama-3.1-8b-instant").strip()
+SYSTEM_INSTRUCTION = (
+    "You are an enterprise assistant inside ControlPlane. Respond only in clear, "
+    "professional English unless the user explicitly requests another language. "
+    "Do not invent personal data, credentials, or unsupported facts."
+)
 
 def _env(name: str) -> str:
     return os.getenv(name, "").strip()
@@ -51,7 +56,7 @@ async def generate_llm_response(prompt: str, model_id: str = "", temperature: fl
                     headers={"Authorization": f"Bearer {_env('GROQ_API_KEY')}", "Content-Type": "application/json"},
                     json={
                         "model": _provider_model(model_id, "groq"),
-                        "messages": [{"role": "user", "content": prompt}],
+                        "messages": [{"role": "system", "content": SYSTEM_INSTRUCTION}, {"role": "user", "content": prompt}],
                         "temperature": temperature,
                         "max_tokens": 400
                     }
@@ -62,7 +67,7 @@ async def generate_llm_response(prompt: str, model_id: str = "", temperature: fl
                         res = await client.post(
                             "https://api.groq.com/openai/v1/chat/completions",
                             headers={"Authorization": f"Bearer {_env('GROQ_API_KEY')}", "Content-Type": "application/json"},
-                            json={"model": discovered, "messages": [{"role": "user", "content": prompt}], "temperature": temperature, "max_tokens": 400},
+                            json={"model": discovered, "messages": [{"role": "system", "content": SYSTEM_INSTRUCTION}, {"role": "user", "content": prompt}], "temperature": temperature, "max_tokens": 400},
                         )
                 if res.status_code == 200:
                     data = res.json()
@@ -85,7 +90,7 @@ async def generate_llm_response(prompt: str, model_id: str = "", temperature: fl
                     headers={"Authorization": f"Bearer {_env('OPENROUTER_API_KEY')}", "Content-Type": "application/json"},
                     json={
                         "model": _provider_model(model_id, "openrouter"),
-                        "messages": [{"role": "user", "content": prompt}],
+                        "messages": [{"role": "system", "content": SYSTEM_INSTRUCTION}, {"role": "user", "content": prompt}],
                         "temperature": temperature
                     }
                 )
@@ -95,7 +100,7 @@ async def generate_llm_response(prompt: str, model_id: str = "", temperature: fl
                         res = await client.post(
                             "https://openrouter.ai/api/v1/chat/completions",
                             headers={"Authorization": f"Bearer {_env('OPENROUTER_API_KEY')}", "Content-Type": "application/json"},
-                            json={"model": discovered, "messages": [{"role": "user", "content": prompt}], "temperature": temperature, "max_tokens": 400},
+                            json={"model": discovered, "messages": [{"role": "system", "content": SYSTEM_INSTRUCTION}, {"role": "user", "content": prompt}], "temperature": temperature, "max_tokens": 400},
                         )
                 if res.status_code == 200:
                     data = res.json()
