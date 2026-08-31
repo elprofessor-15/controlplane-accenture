@@ -5,14 +5,30 @@ from urllib.parse import quote
 
 import httpx
 
+try:
+    from redis.asyncio import Redis
+except ImportError:
+    Redis = None
+
 QUEUE_KEY = "controlplane:review_queue"
 
 
 def _configured() -> bool:
-    return bool(os.getenv("KV_REST_API_URL", "").strip() and os.getenv("KV_REST_API_TOKEN", "").strip())
+    return bool(
+        os.getenv("REDIS_URL", "").strip()
+        or (os.getenv("KV_REST_API_URL", "").strip() and os.getenv("KV_REST_API_TOKEN", "").strip())
+    )
 
 
 async def _command(command: list[Any]) -> Any:
+    redis_url = os.getenv("REDIS_URL", "").strip()
+    if redis_url and Redis is not None:
+        client = Redis.from_url(redis_url, decode_responses=True)
+        try:
+            return await client.execute_command(*command)
+        finally:
+            await client.aclose()
+
     url = os.getenv("KV_REST_API_URL", "").rstrip("/")
     token = os.getenv("KV_REST_API_TOKEN", "")
     encoded = "/".join(quote(str(part), safe="") for part in command)
@@ -30,8 +46,6 @@ async def persist_review_item(item: dict[str, Any]) -> bool:
         return True
     except (httpx.HTTPError, ValueError):
         return False
-    await _command(["LPUSH", QUEUE_KEY, json.dumps(item, separators=(",", ":"))])
-    return True
 
 
 async def list_review_items() -> list[dict[str, Any]] | None:
@@ -42,8 +56,6 @@ async def list_review_items() -> list[dict[str, Any]] | None:
         return [json.loads(value) for value in (values or [])]
     except (httpx.HTTPError, ValueError):
         return None
-    values = await _command(["LRANGE", QUEUE_KEY, "0", "99"])
-    return [json.loads(value) for value in (values or [])]
 
 
 async def resolve_review_item(queue_id: str, status: str) -> dict[str, Any] | None:
