@@ -60,8 +60,41 @@ document.addEventListener("DOMContentLoaded", () => {
 
     document.getElementById("resetDemoBtn").addEventListener("click", async () => {
         await fetch("/api/demo/reset", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ model_id: "claude-sonnet-3-5" }) });
-        document.getElementById("headerTrustScore").textContent = "0.860";
+
+        // Clear the prompt input completely
+        document.getElementById("promptInput").value = "";
+
+        // Reset the lane badge back to its neutral starting state
+        const laneBadge = document.getElementById("laneBadge");
+        laneBadge.className = "lane-badge lane-fast";
+        laneBadge.innerHTML = '<i class="fa-solid fa-check"></i> FAST LANE';
+        document.getElementById("shadowBadge").classList.add("hidden");
+
+        // Reset the result summary line back to placeholder dashes
+        document.getElementById("resAction").textContent = "--";
+        document.getElementById("resLatency").textContent = "--";
+        document.getElementById("resRiskTier").textContent = "--";
+
+        // Reset the reasoning line
+        document.getElementById("reasoningLine").textContent = "Submit a request to see how query risk and model trust combine to pick a lane.";
+
+        // Reset the response output box
         document.getElementById("resOutput").textContent = "Demo session reset. The next scripted prompts will show the trust lanes in sequence.";
+        document.getElementById("tamperHash").textContent = "--";
+
+        // Reset deterministic + heavy check cards back to blank
+        document.getElementById("detStatus").textContent = "PASS";
+        document.getElementById("detDetails").textContent = "PII: Clean | Token: Normal";
+        document.getElementById("detMethodTag").textContent = "--";
+        document.getElementById("heavyStatus").textContent = "PASS";
+        renderCheckGauge("consistencyGauge", "consistencyValue", 1, "--");
+        renderCheckGauge("groundingGauge", "groundingValue", 1, "--");
+        document.getElementById("heavyMethodTag").textContent = "--";
+
+        // Header trust score back to genesis baseline
+        document.getElementById("headerTrustScore").textContent = "0.860";
+
+        // Refresh side panels from the now-cleared database state
         fetchDashboardMetrics();
         fetchReviewQueue();
         fetchAuditTrail();
