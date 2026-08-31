@@ -339,15 +339,27 @@ async function fetchReviewQueue() {
 }
 
 async function resolveReview(queueId, action) {
+    const button = document.querySelector(`button[onclick="resolveReview('${queueId}', '${action}')"]`);
+    const originalLabel = button ? button.textContent : "";
     try {
-        await fetch("/api/review_queue/resolve", {
+        if (button) {
+            button.disabled = true;
+            button.textContent = "Saving...";
+        }
+        const response = await fetch("/api/review_queue/resolve", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ queue_id: queueId, action })
         });
-        fetchReviewQueue();
-        fetchDashboardMetrics();
-    } catch (e) {}
+        if (!response.ok) throw new Error(`Review action failed (HTTP ${response.status})`);
+        await Promise.all([fetchReviewQueue(), fetchDashboardMetrics()]);
+    } catch (e) {
+        setSystemStatus(e.message, "alert");
+        if (button) {
+            button.disabled = false;
+            button.textContent = originalLabel;
+        }
+    }
 }
 
 async function fetchAuditTrail() {
